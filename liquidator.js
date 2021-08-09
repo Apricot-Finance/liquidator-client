@@ -224,8 +224,6 @@ class PriceWatcher extends AccountWatcher {
 For the test run, we watch:
 1. load all prices
 2. start monitoring user pages and user infos
-
-Once per second we compute an updated collateral for each user (so that demo appears fast)
 */
 
 // step 1
