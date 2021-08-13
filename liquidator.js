@@ -1,7 +1,7 @@
 /*global BigInt */
-import {consts, ConnWrapper, Parser} from "@apricot-lend/apricot"
-import {Connection, PublicKey, Account} from "@solana/web3.js"
-import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
+const {consts, ConnWrapper, Parser} = require("@apricot-lend/apricot");
+const {Connection, PublicKey, Account} =  require("@solana/web3.js");
+// import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
 
 /*
 constantly monitor:
@@ -24,9 +24,28 @@ wrapper.extern_liquidate(
     ) {}
 
 */
+const sleep = function(duration) {
+    return new Promise((resolve) => {
+        setTimeout(() => {
+            resolve();
+        }, duration);
+    });
+};
+Parser.parseUsersPage = (data) => {
+    let result = [];
+    let count = data.length / 32;
+    for(let i = 0; i < count; i++) {
+        const offset = i * 32;
+        const end = offset + 32;
+        result[i] = new PublicKey(new Uint8Array(data.slice(offset, end)));
+    }
+    return result;
+}
+
+(async () => {
 
 let connection = new Connection("https://api.devnet.solana.com", "finalized");
-let wrapper = new ConnWrapper(connection);
+// let wrapper = new ConnWrapper(connection);
 
 console.log(await connection.getRecentBlockhash());
 console.log("connected");
@@ -100,12 +119,16 @@ class UsersPageWatcher extends AccountWatcher {
         this.walletStrToUserInfoWatcher = this.children;
         (async () => {
             const watchedKey = await consts.get_users_page_key(basePda, pageId);
-            console.log(watchedKey.toString())
+            console.log(`User page ${pageId} watch key: ${watchedKey.toString()}`);
             this.init(watchedKey);
         })();
     }
     onUpdate(value) {
         console.log("Updated at page="+this.pageId);
+        if (!value) {
+            console.log(`Value is empty: ${value}`);
+            return;
+        }
         this.value = Parser.parseUsersPage(new Uint8Array(value.data));
         const walletStrList = this.value.map(k => k.toString()).filter(k=>k!=="11111111111111111111111111111111");
         const walletStrSet = new Set(walletStrList);
@@ -157,7 +180,7 @@ class UserInfoWatcher extends AccountWatcher {
             return;
         console.log("Updated at user="+this.userWalletKey.toString());
         this.value = Parser.parseUserInfo(new Uint8Array(value.data));
-        console.log(this.value);
+        console.log(`Parsed user info: `, this.value);
         // compute collateral ratio
         const collateralRatio = this.getCollateralRatio(poolIdToPrice);
         const walletStr = this.userWalletKey.toString();
@@ -174,14 +197,14 @@ class UserInfoWatcher extends AccountWatcher {
         }
     }
     getTotalDepositAndBorrowInUsd(poolIdToPrice) {
-        const zero = BigInt(0);
+        const zero = 0;
         let [totalDepositUsd, totalBorrowUsd] = [zero, zero];
-        for(var assetId in this.value.user_asset_info) {
-            const uai = this.value.user_asset_info[assetId];
+        for(let uai of this.value.user_asset_info) {
             const poolId = uai.pool_id;
             const price = poolIdToPrice[poolId].price_in_usd;
-            totalDepositUsd += price * uai.deposit_amount / BigInt(10000000);
-            totalBorrowUsd += price * uai.borrow_amount / BigInt(10000000);
+            console.log(`Pool id ${poolId} price in usd: ${price}`);
+            totalDepositUsd += price * uai.deposit_amount / 10000000;
+            totalBorrowUsd += price * uai.borrow_amount / 10000000;
         }
         return [totalDepositUsd, totalBorrowUsd];
     }
@@ -193,11 +216,11 @@ class UserInfoWatcher extends AccountWatcher {
        if(this.value === null) {
            return null;
        }
-        let zero = BigInt(0);
+        let zero = 0;
         let [totalDepositUsd, totalBorrowUsd] = this.getTotalDepositAndBorrowInUsd(poolIdToPrice);
         if (totalBorrowUsd === zero || totalDepositUsd === zero)
             return null;
-        return totalDepositUsd * BigInt(100) / totalBorrowUsd;
+        return totalDepositUsd * 100 / totalBorrowUsd;
     }
 }
 
@@ -268,3 +291,4 @@ for(let i = pageIndexStart; i < pageIndexEnd; i++) {
 while (true) {
     await sleep(10000);
 }
+})();
