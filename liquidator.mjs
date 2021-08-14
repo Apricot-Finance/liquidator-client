@@ -1,4 +1,4 @@
-import {consts, ConnWrapper, Parser} from "@apricot-lend/apricot"
+import {consts, ConnWrapper, Parser, pool_id_to_decimal_multiplier} from "@apricot-lend/apricot"
 import {Connection, PublicKey, Account} from "@solana/web3.js"
 import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
 
@@ -184,8 +184,8 @@ class UserInfoWatcher extends AccountWatcher {
             const uai = this.value.user_asset_info[assetId];
             const poolId = uai.pool_id;
             const price = poolIdToPriceWatcher[poolId].value.price_in_usd;
-            totalDepositUsd += price * uai.deposit_amount / (10000000);
-            totalBorrowUsd += price * uai.borrow_amount / (10000000);
+            totalDepositUsd += price * uai.deposit_amount / pool_id_to_decimal_multiplier[poolId];
+            totalBorrowUsd += price * uai.borrow_amount / pool_id_to_decimal_multiplier[poolId];
         }
         return [totalDepositUsd, totalBorrowUsd];
     }
