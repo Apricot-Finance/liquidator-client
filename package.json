@@ -1,6 +1,6 @@
 {
   "name": "apricot-liquidator",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -8,7 +8,7 @@
   "author": "Apricot",
   "license": "ISC",
   "dependencies": {
-    "@apricot-lend/apricot": "0.10.0",
+    "@apricot-lend/apricot": "0.13.3",
     "@solana/spl-token": "^0.1.4",
     "@solana/web3.js": "^1.14.0"
   }
