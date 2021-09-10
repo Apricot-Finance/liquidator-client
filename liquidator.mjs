@@ -99,8 +99,8 @@ class AccountWatcher {
             });
         });
     }
-    unsub(connection) {
-        connection.removeAccountChangeListener(this.subId);
+    unsub() {
+        this.connection.removeAccountChangeListener(this.subId);
         Object.values(this.children).map(child => child.unsub());
     }
     onUpdate(value) {
