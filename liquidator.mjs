@@ -1,6 +1,20 @@
-import {consts, ConnWrapper, Parser, pool_id_to_decimal_multiplier} from "@apricot-lend/apricot"
-import {Connection, PublicKey, Account} from "@solana/web3.js"
+import {
+    consts, 
+    ConnWrapper, 
+    Parser, 
+    pool_id_to_decimal_multiplier,
+    poolIdToLtv,
+    poolIdToMintStr,
+} from "@apricot-lend/apricot"
+import {Connection, PublicKey, Keypair} from "@solana/web3.js"
 import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
+
+const testnetLiquidatorPrivateKey = [124,157,72,62,130,156,109,96,93,19,88,139,93,64,170,173,170,218,125,107,55,109,242,241,221,214,233,98,62,214,7,29,96,196,93,3,37,239,231,14,170,149,229,144,215,19,4,103,147,107,6,150,152,79,174,61,111,117,46,233,242,45,80,155];
+const testnetLiquidatorAccount = Keypair.fromSecretKey(new Uint8Array(testnetLiquidatorPrivateKey));
+const testnetLiquidatorPubkey = testnetLiquidatorAccount.publicKey;
+
+console.log(testnetLiquidatorPubkey);
+
 
 // util
 async function sleep(ms) {
@@ -41,14 +55,6 @@ const [pricePda, __] = await consts.get_price_pda();
 let poolListKey = await consts.get_pool_list_key(basePda);
 let poolList = Parser.parsePoolList((await connection.getParsedAccountInfo(poolListKey)).value.data);
 
-// remove a deprecated pool, poolId=5 is a badly configured test pool for fake_usdt_usdc
-const skippedPools = [5];
-
-function isDeprecated(poolId) {
-    poolId = parseInt(poolId);
-    return skippedPools.indexOf(poolId) >= 0;
-}
-
 console.log("Found PoolList: ")
 console.log(poolList)
 
@@ -66,8 +72,8 @@ class Throttler {
                 const f = this.tasks.shift();
                 f();
             }
-            // 2 TPS
-            await sleep(500);
+            // 4 TPS
+            await sleep(250);
         }
     }
 }
@@ -156,7 +162,6 @@ class UsersPageWatcher extends AccountWatcher {
     }
 }
 
-let poolIdToPrice = {};
 const poolIdToPriceWatcher = {}
 
 class UserInfoWatcher extends AccountWatcher {
@@ -176,32 +181,6 @@ class UserInfoWatcher extends AccountWatcher {
         console.log("Updated at user="+this.userWalletKey.toString());
         this.value = Parser.parseUserInfo(new Uint8Array(value.data));
         console.log(this.value);
-    }
-    getTotalDepositAndBorrowInUsd() {
-        const zero = 0;
-        let [totalDepositUsd, totalBorrowUsd] = [zero, zero];
-        for(var assetId in this.value.user_asset_info) {
-            const uai = this.value.user_asset_info[assetId];
-            const poolId = uai.pool_id;
-            const price = poolIdToPriceWatcher[poolId].value.price_in_usd;
-            totalDepositUsd += price * uai.deposit_amount / pool_id_to_decimal_multiplier[poolId];
-            totalBorrowUsd += price * uai.borrow_amount / pool_id_to_decimal_multiplier[poolId];
-        }
-        return [totalDepositUsd, totalBorrowUsd];
-    }
-    getCollateralRatio() {
-        /*
-        returns null if user has no borrow/deposit
-        otherwise returns collateral ratio
-        */
-       if(this.value === null) {
-           return null;
-       }
-        let zero = (0);
-        let [totalDepositUsd, totalBorrowUsd] = this.getTotalDepositAndBorrowInUsd();
-        if (totalBorrowUsd === zero || totalDepositUsd === zero)
-            return null;
-        return totalDepositUsd * (100) / totalBorrowUsd;
     }
 }
 
@@ -223,6 +202,110 @@ class PriceWatcher extends AccountWatcher {
     }
 }
 
+class LiquidationPlanner {
+    constructor(userInfo, userWalletKey) {
+        this.value = userInfo;
+        this.userWalletKey = userWalletKey;
+        this.poolIdToDepositVal = {};
+        this.poolIdToBorrowVal = {};
+        this.totalBorrowVal = 0;
+        this.totalBorrowLimitVal = 0;
+        this.borrowLimitUsedPercent = null;
+        this.computeStats();
+    }
+    computeStats() {
+        const zero = 0;
+        for(var assetId in this.value.user_asset_info) {
+            const uai = this.value.user_asset_info[assetId];
+            const poolId = uai.pool_id;
+            const price = parseFloat(poolIdToPriceWatcher[poolId].value.price_in_usd);
+            const addedDepositVal = price * parseFloat(uai.deposit_amount) / pool_id_to_decimal_multiplier[poolId];
+            const addedBorrowVal = price * parseFloat(uai.borrow_amount) / pool_id_to_decimal_multiplier[poolId];
+            this.poolIdToBorrowVal[poolId] = addedBorrowVal;
+            this.poolIdToDepositVal[poolId] = addedDepositVal;
+            this.totalBorrowLimitVal += addedDepositVal * poolIdToLtv[poolId];
+            this.totalBorrowVal += addedBorrowVal;
+        }
+        if (this.totalBorrowVal === zero || this.totalBorrowLimitVal === zero) {
+            this.borrowLimitUsedPercent = null;
+        }
+        else {
+            this.borrowLimitUsedPercent = this.totalBorrowVal / this.totalBorrowLimitVal;
+        }
+    }
+    getLiquidationSizes(collateralPoolIdVal, borrowedPoolIdVal) {
+        const [collateralPoolId, collateralVal] = collateralPoolIdVal;
+        const [borrowedPoolId, borrowedVal] = borrowedPoolIdVal;
+        const postFactor = 0.9;
+        const ltv = poolIdToLtv[collateralPoolId];
+        // We need to sell/redeem X USD of asset and use it to repay our debt. To compute X:
+        // (totalBorrow-X) / (borrowLimit - X*ltv) ~= postFactor
+        // (totalBorrow-X)  ~= (borrowLimit - X*ltv) * postFactor
+        // (1 - ltv * postFactor) * X ~= totalBorrow - borrowLimit * postFactor
+        // X ~= (totalBorrow - borrowLimit * post_factor ) / (1 - ltv * post_factor)
+        const X = (this.totalBorrowVal - this.totalBorrowLimitVal * postFactor) / (1 - postFactor * ltv);
+
+        const liquidatableVal = Math.min(collateralVal, borrowedVal, X);
+        const collateralPrice = parseFloat(poolIdToPriceWatcher[collateralPoolId].value.price_in_usd);
+        const borrowedPrice = parseFloat(poolIdToPriceWatcher[borrowedPoolId].value.price_in_usd);
+        
+        const minCollateralAmt = liquidatableVal / collateralPrice * 0.999;
+        const borrowedRepayAmt = liquidatableVal / borrowedPrice * 0.99;
+
+        return [minCollateralAmt, borrowedRepayAmt];
+
+    }
+    pickLiquidationAction() {
+
+        // pick most-valued collateral and most-valued borrowed asset
+        const sortedCollateralVals = Object.entries(this.poolIdToDepositVal).sort((kv1,kv2)=>{
+            return kv2[1] - kv1[1];
+        });
+        const sortedBorrowedVals = Object.entries(this.poolIdToBorrowVal).sort((kv1,kv2)=>{
+            return kv2[1] - kv1[1];
+        });
+        const [collateralMinGetAmt, borrowedRepayAmt] = this.getLiquidationSizes(sortedCollateralVals[0], sortedBorrowedVals[0]);
+        return [
+            sortedCollateralVals[0][0], collateralMinGetAmt,
+            sortedBorrowedVals[0][0], borrowedRepayAmt,
+        ];
+    }
+
+    async fireLiquidationAction() {
+        const [collateralPoolId, collateralAmt, borrowedPoolId, borrowedAmt] = this.pickLiquidationAction();
+        const collateralMintStr = poolIdToMintStr[collateralPoolId];
+        const collateralMintKey = new PublicKey(collateralMintStr);
+        const borrowedMintStr = poolIdToMintStr[borrowedPoolId];
+        const borrowedMintKey = new PublicKey(borrowedMintStr);
+        console.log(collateralMintKey);
+        console.log(borrowedMintKey);
+        console.log(ASSOCIATED_TOKEN_PROGRAM_ID);
+        console.log(TOKEN_PROGRAM_ID);
+        console.log(testnetLiquidatorPubkey);
+        const collateralSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, collateralMintKey, testnetLiquidatorPubkey);
+        const borrowedSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, borrowedMintKey, testnetLiquidatorPubkey);
+        console.log(collateralSplKey);
+        console.log(borrowedSplKey);
+        throttler.addNext(async () => {
+            try{
+                await wrapper.extern_liquidate(
+                    testnetLiquidatorAccount,
+                    this.userWalletKey,
+                    collateralSplKey,
+                    borrowedSplKey,
+                    collateralMintStr,
+                    borrowedMintStr,
+                    collateralAmt * pool_id_to_decimal_multiplier[collateralPoolId],    // receive amount
+                    borrowedAmt * pool_id_to_decimal_multiplier[borrowedPoolId],        // pay amount
+                );
+            }
+            catch(e) {
+                console.log(e);
+            }
+        });
+    }
+}
+
 
 /*
 For the test run, we watch:
@@ -235,10 +318,6 @@ For the test run, we watch:
 for(let poolId in poolList) {
     // skip deprecated pool
     poolId = parseInt(poolId);
-    if(isDeprecated(poolId)) {
-        poolIdToPriceWatcher[poolId] = null;
-        continue;
-    }
     poolIdToPriceWatcher[poolId] = new PriceWatcher(poolList[poolId], connection);
 }
 
@@ -248,9 +327,6 @@ while (true) {
     for(let poolId in poolList) {
         poolId = parseInt(poolId);
         // skip deprecated pool
-        if(isDeprecated(poolId)){
-            continue;
-        }
         const watcher = poolIdToPriceWatcher[poolId];
         if (watcher.value === null) {
             allFound = false;
@@ -277,18 +353,21 @@ for(let i = pageIndexStart; i < pageIndexEnd; i++) {
 
 // step 3
 while (true) {
-    pageWatchers.map(pageWatcher=>{
-
-        Object.values(pageWatcher.walletStrToUserInfoWatcher).map(uiw=>{
-            const collateralRatio = uiw.getCollateralRatio();
+    for(let pageWatcher of pageWatchers) {
+        for(let uiw of Object.values(pageWatcher.walletStrToUserInfoWatcher)) {
+            if(uiw.value === null) {
+                continue;
+            }
+            const planner = new LiquidationPlanner(uiw.value, uiw.userWalletKey);
             const walletStr = uiw.userWalletKey.toString();
-            console.log(walletStr + ".collateral_ratio="+collateralRatio);
+            console.log(walletStr + ".borrowLimUsed="+planner.borrowLimitUsedPercent);
             // null means user has no borrow/deposit
-            if(collateralRatio === null)
-                return;
-            if( collateralRatio < 110 ) {
+            if(planner.borrowLimitUsedPercent === null){
+                continue;
+            }
+            if( planner.borrowLimitUsedPercent > 1.0 ) {
                 // add to external liquidation list
-                console.log(walletStr + " reached collateral ratio " + collateralRatio + " and can be externally liquidated");
+                console.log(walletStr + " reached borrowLimUsed=" + planner.borrowLimitUsedPercent + " and can be externally liquidated");
                 // invoke extern_liquidate
                 // TODO
                 // wrapper.extern_liquidate(/**/);
@@ -297,9 +376,19 @@ while (true) {
                 // collateral ratio, we might think that the user can already be liquidated. But the price we get at this time does
                 // not seem to have been finalized. It takes about 20s for the price update to be finalized on-chain, so from the
                 // time we realize a user can be liquidated, to the time it can actually be liquidated, there's about a 20s delay.
+                let nowTime = new Date().getTime();
+
+                // if throttler has loads of requests pending, lay low first
+                if(throttler.tasks.length < 100) {
+                    // for each user, we fire at most once every 20 seconds
+                    if((nowTime - uiw.lastFiredTime) > 20 * 1000) {
+                        planner.fireLiquidationAction();
+                        uiw.lastFiredTime = nowTime;
+                    }
+                }
             }
-        });
-    });
+        }
+    }
 
     // sleep 10s. You may want to change this number to respond quickly
     await sleep(10000);
