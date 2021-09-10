@@ -73,7 +73,7 @@ class Throttler {
                 f();
             }
             // 4 TPS
-            await sleep(250);
+            await sleep(500);
         }
     }
 }
@@ -93,13 +93,10 @@ class AccountWatcher {
         throttler.addNext(() => {
             connection.getAccountInfo(watchedKey).then((value) => {
                 this.onUpdate(value);
+                this.subId = connection.onAccountChange(watchedKey, (value, ctx) => {
+                    this.onUpdate(value);
+                }, "confirmed");
             });
-            // FIXME: obviously at the time we get notified the transaction is not yet FINALIZED. Need to figure out why
-            // If we can't find a fix, we need to delay the call to this.onUpdate(value) by 20s (which seems to do the
-            // trick)
-            this.subId = connection.onAccountChange(watchedKey, (value, ctx) => {
-                this.onUpdate(value);
-            }, "finalized");
         });
     }
     unsub(connection) {
@@ -180,7 +177,6 @@ class UserInfoWatcher extends AccountWatcher {
             return;
         console.log("Updated at user="+this.userWalletKey.toString());
         this.value = Parser.parseUserInfo(new Uint8Array(value.data));
-        console.log(this.value);
     }
 }
 
@@ -354,13 +350,18 @@ for(let i = pageIndexStart; i < pageIndexEnd; i++) {
 // step 3
 while (true) {
     for(let pageWatcher of pageWatchers) {
-        for(let uiw of Object.values(pageWatcher.walletStrToUserInfoWatcher)) {
+        let uiws = Object.values(pageWatcher.walletStrToUserInfoWatcher);
+        let received = 0;
+        for(let uiw of uiws) {
             if(uiw.value === null) {
                 continue;
             }
+            received += 1;
             const planner = new LiquidationPlanner(uiw.value, uiw.userWalletKey);
             const walletStr = uiw.userWalletKey.toString();
-            console.log(walletStr + ".borrowLimUsed="+planner.borrowLimitUsedPercent);
+            if(planner.borrowLimitUsedPercent > 0.95) {
+                console.log(walletStr + ".borrowLimUsed="+planner.borrowLimitUsedPercent);
+            }
             // null means user has no borrow/deposit
             if(planner.borrowLimitUsedPercent === null){
                 continue;
@@ -388,6 +389,7 @@ while (true) {
                 }
             }
         }
+        console.log(`${pageWatcher.pageId}, ${received}/${uiws.length}`);
     }
 
     // sleep 10s. You may want to change this number to respond quickly
