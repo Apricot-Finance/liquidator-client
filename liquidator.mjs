@@ -195,9 +195,6 @@ class PriceWatcher extends AccountWatcher {
     }
     onUpdate(value) {
         this.value = Parser.parseAssetPrice(new Uint8Array(value.data));
-        console.log("Updated price for "+this.mintKey.toString());
-        console.log(this.watchedKey.toString());
-        console.log(this.value);
     }
 }
 
