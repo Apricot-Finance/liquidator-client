@@ -73,7 +73,7 @@ class Throttler {
                 f();
             }
             // 4 TPS
-            await sleep(500);
+            await sleep(250);
         }
     }
 }
@@ -93,10 +93,13 @@ class AccountWatcher {
         throttler.addNext(() => {
             connection.getAccountInfo(watchedKey).then((value) => {
                 this.onUpdate(value);
+            });
+            throttler.addNext(() => {
                 this.subId = connection.onAccountChange(watchedKey, (value, ctx) => {
                     this.onUpdate(value);
                 }, "confirmed");
             });
+
         });
     }
     unsub() {
@@ -338,8 +341,9 @@ while (true) {
 
 
 // step 2
-const pageIndexStart = 0;
-const pageIndexEnd = 10;
+const [_node, _script, pageStart, pageEnd] = process.argv;
+const pageIndexStart = parseInt(pageStart);
+const pageIndexEnd = parseInt(pageEnd);
 const pageWatchers = [];
 
 for(let i = pageIndexStart; i < pageIndexEnd; i++) {
@@ -349,6 +353,7 @@ for(let i = pageIndexStart; i < pageIndexEnd; i++) {
 
 // step 3
 while (true) {
+    console.log(throttler.tasks.length);
     for(let pageWatcher of pageWatchers) {
         let uiws = Object.values(pageWatcher.walletStrToUserInfoWatcher);
         let received = 0;
