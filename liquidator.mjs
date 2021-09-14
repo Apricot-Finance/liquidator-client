@@ -8,6 +8,7 @@ import {
 } from "@apricot-lend/apricot"
 import {Connection, PublicKey, Keypair} from "@solana/web3.js"
 import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
+import {server, delay} from "./config.mjs";
 
 const testnetLiquidatorPrivateKey = [124,157,72,62,130,156,109,96,93,19,88,139,93,64,170,173,170,218,125,107,55,109,242,241,221,214,233,98,62,214,7,29,96,196,93,3,37,239,231,14,170,149,229,144,215,19,4,103,147,107,6,150,152,79,174,61,111,117,46,233,242,45,80,155];
 const testnetLiquidatorAccount = Keypair.fromSecretKey(new Uint8Array(testnetLiquidatorPrivateKey));
@@ -43,7 +44,7 @@ wrapper.extern_liquidate(
 
 */
 
-let connection = new Connection("https://api.devnet.solana.com", "finalized");
+let connection = new Connection(server, "confirmed");
 let wrapper = new ConnWrapper(connection);
 
 console.log(await connection.getRecentBlockhash());
@@ -73,7 +74,7 @@ class Throttler {
                 f();
             }
             // 4 TPS
-            await sleep(250);
+            await sleep(delay);
         }
     }
 }
