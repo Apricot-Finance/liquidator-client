@@ -9,10 +9,32 @@ import {
 import {Connection, PublicKey, Keypair} from "@solana/web3.js"
 import {Token, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID} from '@solana/spl-token';
 import {server, delay} from "./config.mjs";
+import * as fs from "fs"
 
 const testnetLiquidatorPrivateKey = [124,157,72,62,130,156,109,96,93,19,88,139,93,64,170,173,170,218,125,107,55,109,242,241,221,214,233,98,62,214,7,29,96,196,93,3,37,239,231,14,170,149,229,144,215,19,4,103,147,107,6,150,152,79,174,61,111,117,46,233,242,45,80,155];
 const testnetLiquidatorAccount = Keypair.fromSecretKey(new Uint8Array(testnetLiquidatorPrivateKey));
 const testnetLiquidatorPubkey = testnetLiquidatorAccount.publicKey;
+
+
+const date = new Date();
+const dateStr = date.toISOString();
+const dateStrSub = dateStr.substr(0, dateStr.indexOf("."));
+const updateLogger = fs.createWriteStream(`./assist.updates.${dateStrSub}`, {});
+const updateTimedLogger = fs.createWriteStream(`./assist.updates.timed.${dateStrSub}`, {});
+const actionTimedLogger = fs.createWriteStream(`./assist.actions.timed.${dateStrSub}`, {});
+
+function logUpdate(str) {
+    const time = new Date();
+    updateLogger.write(str+'\n');
+    updateTimedLogger.write(time.toISOString() + ": " + str+'\n');
+    console.log(str);
+}
+
+function logAction(str) {
+    const time = new Date();
+    actionTimedLogger.write(time.toISOString() + ": " + str+'\n');
+    console.log(str);
+}
 
 console.log(testnetLiquidatorPubkey);
 
@@ -128,12 +150,11 @@ class UsersPageWatcher extends AccountWatcher {
             console.log("page="+this.pageId+" has not been allocated yet.");
             return;
         }
-        console.log("Updated at page="+this.pageId);
+        logUpdate("Updated at page="+this.pageId);
 
         this.value = Parser.parseUsersPage(new Uint8Array(value.data));
         const walletStrList = this.value.map(k => k.toString()).filter(k=>k!=="11111111111111111111111111111111");
         const walletStrSet = new Set(walletStrList);
-        console.log(walletStrSet);
         // if user no longer exists on page, remove it
         Object.keys(this.walletStrToUserInfoWatcher).map(walletStr=>{
             if(!walletStrSet.has(walletStr)) {
@@ -179,8 +200,8 @@ class UserInfoWatcher extends AccountWatcher {
     onUpdate(value) {
         if(value===null)
             return;
-        console.log("Updated at user="+this.userWalletKey.toString());
         this.value = Parser.parseUserInfo(new Uint8Array(value.data));
+        logUpdate("Updated at user="+this.userWalletKey.toString()+", pageId="+this.value.page_id);
     }
 }
 
@@ -274,15 +295,15 @@ class LiquidationPlanner {
         const collateralMintKey = new PublicKey(collateralMintStr);
         const borrowedMintStr = poolIdToMintStr[borrowedPoolId];
         const borrowedMintKey = new PublicKey(borrowedMintStr);
-        console.log(collateralMintKey);
-        console.log(borrowedMintKey);
-        console.log(ASSOCIATED_TOKEN_PROGRAM_ID);
-        console.log(TOKEN_PROGRAM_ID);
-        console.log(testnetLiquidatorPubkey);
+        logAction(collateralMintKey);
+        logAction(borrowedMintKey);
+        logAction(ASSOCIATED_TOKEN_PROGRAM_ID);
+        logAction(TOKEN_PROGRAM_ID);
+        logAction(testnetLiquidatorPubkey);
         const collateralSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, collateralMintKey, testnetLiquidatorPubkey);
         const borrowedSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, borrowedMintKey, testnetLiquidatorPubkey);
-        console.log(collateralSplKey);
-        console.log(borrowedSplKey);
+        logAction(collateralSplKey);
+        logAction(borrowedSplKey);
         throttler.addNext(async () => {
             try{
                 await wrapper.extern_liquidate(
@@ -297,7 +318,7 @@ class LiquidationPlanner {
                 );
             }
             catch(e) {
-                console.log(e);
+                logAction(e);
             }
         });
     }
@@ -351,7 +372,7 @@ for(let i = pageIndexStart; i < pageIndexEnd; i++) {
 
 // step 3
 while (true) {
-    console.log(throttler.tasks.length);
+    console.log("=================="+new Date());
     for(let pageWatcher of pageWatchers) {
         let uiws = Object.values(pageWatcher.walletStrToUserInfoWatcher);
         let received = 0;
@@ -362,8 +383,8 @@ while (true) {
             received += 1;
             const planner = new LiquidationPlanner(uiw.value, uiw.userWalletKey);
             const walletStr = uiw.userWalletKey.toString();
-            if(planner.borrowLimitUsedPercent > 0.95) {
-                console.log(walletStr + ".borrowLimUsed="+planner.borrowLimitUsedPercent);
+            if(planner.borrowLimitUsedPercent > 0.97) {
+                console.log(walletStr + ".borrowLimUsed="+planner.borrowLimitUsedPercent+", pageId="+pageWatcher.pageId);
             }
             // null means user has no borrow/deposit
             if(planner.borrowLimitUsedPercent === null){
