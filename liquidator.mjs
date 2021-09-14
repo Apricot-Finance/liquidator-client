@@ -175,7 +175,7 @@ class UsersPageWatcher extends AccountWatcher {
     removeUser(walletStr) {
         // FIXME: we had an exception thrown in here before when user gets deleted. Need to test and figure out why
         try {
-            this.walletStrToUserInfoWatcher[walletStr].unsub();
+            //this.walletStrToUserInfoWatcher[walletStr].unsub();
             delete this.walletStrToUserInfoWatcher[walletStr];
         }
         catch(e) {
