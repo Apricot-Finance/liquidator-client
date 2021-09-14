@@ -18,7 +18,7 @@ const testnetLiquidatorPubkey = testnetLiquidatorAccount.publicKey;
 
 const date = new Date();
 const dateStr = date.toISOString();
-const dateStrSub = dateStr.substr(0, dateStr.indexOf("."));
+const dateStrSub = dateStr.substr(0, dateStr.indexOf(".")).replaceAll(":","-");
 const updateLogger = fs.createWriteStream(`./assist.updates.${dateStrSub}`, {});
 const updateTimedLogger = fs.createWriteStream(`./assist.updates.timed.${dateStrSub}`, {});
 const actionTimedLogger = fs.createWriteStream(`./assist.actions.timed.${dateStrSub}`, {});
@@ -295,15 +295,9 @@ class LiquidationPlanner {
         const collateralMintKey = new PublicKey(collateralMintStr);
         const borrowedMintStr = poolIdToMintStr[borrowedPoolId];
         const borrowedMintKey = new PublicKey(borrowedMintStr);
-        logAction(collateralMintKey);
-        logAction(borrowedMintKey);
-        logAction(ASSOCIATED_TOKEN_PROGRAM_ID);
-        logAction(TOKEN_PROGRAM_ID);
-        logAction(testnetLiquidatorPubkey);
+        logAction(`Firing liquidation for ${this.userWalletKey.toString()}`);
         const collateralSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, collateralMintKey, testnetLiquidatorPubkey);
         const borrowedSplKey = await Token.getAssociatedTokenAddress(ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID, borrowedMintKey, testnetLiquidatorPubkey);
-        logAction(collateralSplKey);
-        logAction(borrowedSplKey);
         throttler.addNext(async () => {
             try{
                 await wrapper.extern_liquidate(
